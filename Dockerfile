@@ -4,7 +4,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --include=dev --no-audit --no-fund
 
 COPY . .
 
@@ -27,4 +27,3 @@ ENV PORT=3008
 EXPOSE 3008
 
 CMD ["node", "dist/main.js"]
-
