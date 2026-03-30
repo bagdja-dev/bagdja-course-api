@@ -26,6 +26,14 @@ Open:
 
 - `http://localhost:3008/docs`
 
+## Deploy (Coolify)
+
+This service includes a production `Dockerfile` for Coolify.
+
+- Container port: `3008` (configurable via `PORT`)
+- Required env vars: see `.env.example`
+- Start command: `node dist/main.js` (handled by the Dockerfile)
+
 ## Supabase migrations
 
 This repo includes Supabase CLI folder `supabase/`.
