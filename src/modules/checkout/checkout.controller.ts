@@ -10,22 +10,22 @@ import { CreateBookCheckoutDto } from "./dto/create-book-checkout.dto";
 import { CreateCourseCheckoutDto } from "./dto/create-course-checkout.dto";
 
 @ApiTags("checkout")
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
 @Controller("checkout")
 export class CheckoutController {
   constructor(private readonly checkout: CheckoutService) {}
 
   @Post("course")
+  @ApiBearerAuth()
   @ApiCreatedResponse({ description: "Create course checkout draft (order + booking)" })
-  async course(@CurrentUser() user: AuthUser, @Body() dto: CreateCourseCheckoutDto) {
-    return this.checkout.createCourseCheckout(user, dto);
+  async course(@Body() dto: CreateCourseCheckoutDto, @CurrentUser() user?: AuthUser) {
+    return this.checkout.createCourseCheckout(dto, user);
   }
 
   @Post("book")
+  @ApiBearerAuth()
   @ApiCreatedResponse({ description: "Create book checkout draft (order)" })
-  async book(@CurrentUser() user: AuthUser, @Body() dto: CreateBookCheckoutDto) {
-    return this.checkout.createBookCheckout(user, dto);
+  async book(@Body() dto: CreateBookCheckoutDto, @CurrentUser() user?: AuthUser) {
+    return this.checkout.createBookCheckout(dto, user);
   }
 }
 

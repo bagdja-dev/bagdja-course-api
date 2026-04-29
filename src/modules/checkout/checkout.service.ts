@@ -57,7 +57,7 @@ type OrderItemRow = {
 export class CheckoutService {
   constructor(private readonly supabase: SupabaseService) {}
 
-  async createCourseCheckout(user: AuthUser, dto: CreateCourseCheckoutDto) {
+  async createCourseCheckout(dto: CreateCourseCheckoutDto, user?: AuthUser) {
     const { data: course, error: courseError } = await this.supabase.db
       .from("courses")
       .select("id,slug,title,mode,price")
@@ -87,10 +87,16 @@ export class CheckoutService {
     const subtotal = typedCourse.price * dto.quantity;
     const total = subtotal;
 
+    // Use a special UUID or null for guest users. 
+    // In many systems, we might use a fixed 'GUEST' UUID or just allow null if DB permits.
+    // Based on the migration, user_id is NOT NULL. 
+    // For now, let's use a zero UUID if no user is provided.
+    const finalUserId = user?.userId || "00000000-0000-0000-0000-000000000000";
+
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")
       .insert({
-        user_id: user.userId,
+        user_id: finalUserId,
         kind: "course",
         currency: "IDR",
         status: "pending",
@@ -125,7 +131,7 @@ export class CheckoutService {
     const typedItem = item as OrderItemRow;
 
     const { error: bookingError } = await this.supabase.db.from("bookings").insert({
-      user_id: user.userId,
+      user_id: finalUserId,
       course_id: typedCourse.id,
       session_id: typedSession.id,
       location_id: dto.locationId ?? null,
@@ -148,7 +154,7 @@ export class CheckoutService {
     };
   }
 
-  async createBookCheckout(user: AuthUser, dto: CreateBookCheckoutDto) {
+  async createBookCheckout(dto: CreateBookCheckoutDto, user?: AuthUser) {
     const { data: book, error: bookError } = await this.supabase.db
       .from("books")
       .select("id,slug,title,price")
@@ -161,10 +167,12 @@ export class CheckoutService {
     const subtotal = typedBook.price * dto.quantity;
     const total = subtotal;
 
+    const finalUserId = user?.userId || "00000000-0000-0000-0000-000000000000";
+
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")
       .insert({
-        user_id: user.userId,
+        user_id: finalUserId,
         kind: "book",
         currency: "IDR",
         status: "pending",
