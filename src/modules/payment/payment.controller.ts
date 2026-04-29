@@ -17,6 +17,8 @@ export class PaymentController {
 
   @Post("notification")
   async notification(@Body() notification: any) {
+    console.log("--- MIDTRANS WEBHOOK RECEIVED ---");
+    console.log("Payload:", JSON.stringify(notification, null, 2));
     return this.paymentService.handleNotification(notification);
   }
 }

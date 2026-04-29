@@ -4,6 +4,7 @@ import { ConfigService } from "@nestjs/config";
 import * as midtransClient from "midtrans-client";
 
 import { SupabaseService } from "@/common/supabase/supabase.service";
+import { MailService } from "@/common/mail/mail.service";
 
 @Injectable()
 export class PaymentService {
@@ -11,7 +12,8 @@ export class PaymentService {
 
   constructor(
     private readonly config: ConfigService,
-    private readonly supabase: SupabaseService
+    private readonly supabase: SupabaseService,
+    private readonly mailService: MailService
   ) {
     this.snap = new midtransClient.Snap({
       isProduction: this.config.get<string>("MIDTRANS_IS_PRODUCTION") === "true",
@@ -86,9 +88,27 @@ export class PaymentService {
 
     if (status === "paid") {
       // Update order status
-      await this.supabase.db.from("orders").update({ status: "paid" }).eq("id", orderId);
-      // Update booking status if it's a course
-      await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", orderId);
+      const { data: order, error: updateError } = await this.supabase.db
+        .from("orders")
+        .update({ status: "paid" })
+        .eq("id", orderId)
+        .select("*, order_items(*)")
+        .single();
+
+      if (!updateError && order) {
+        // Update booking status if it's a course
+        await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", orderId);
+
+        // Send confirmation email with product/receipt
+        const customerEmail = order.metadata?.attendeeEmail || order.metadata?.buyerEmail;
+        if (customerEmail) {
+          try {
+            await this.mailService.sendProductEmail(customerEmail, order);
+          } catch (mailErr) {
+            console.error("Failed to send success email:", mailErr);
+          }
+        }
+      }
     } else if (status === "cancelled") {
       await this.supabase.db.from("orders").update({ status: "cancelled" }).eq("id", orderId);
       await this.supabase.db.from("bookings").update({ status: "cancelled" }).eq("order_id", orderId);

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 
 import { AuthModule } from "./common/auth/auth.module";
+import { MailModule } from "./common/mail/mail.module";
 import { SupabaseModule } from "./common/supabase/supabase.module";
 import { AdminAuthFeatureModule } from "./modules/admin-auth/admin-auth.module";
 import { AdminModule } from "./modules/admin/admin.module";
@@ -19,6 +20,7 @@ import { PaymentModule } from "./modules/payment/payment.module";
     ConfigModule.forRoot({ isGlobal: true }),
     SupabaseModule,
     AuthModule,
+    MailModule,
     AdminAuthFeatureModule,
     AdminModule,
     HealthModule,
