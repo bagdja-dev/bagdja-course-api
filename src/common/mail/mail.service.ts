@@ -7,16 +7,19 @@ export class MailService {
   private transporter: nodemailer.Transporter;
 
   constructor(private readonly config: ConfigService) {
-    const mailPort = Number(this.config.get<number>("MAIL_PORT") || 465);
+    const mailPort = Number(this.config.get<number>("MAIL_PORT") || 587);
     this.transporter = nodemailer.createTransport({
       host: this.config.get<string>("MAIL_HOST"),
       port: mailPort,
-      secure: mailPort === 465, // true for 465, false for other ports (like 587)
+      secure: mailPort === 465, // true for 465, false for 587
       auth: {
         user: this.config.get<string>("MAIL_USER"),
         pass: this.config.get<string>("MAIL_PASS")
       },
-      // Tambahkan ini untuk debugging lebih detail di console jika gagal
+      // Zoho terkadang butuh pengaturan TLS tambahan untuk port 587
+      tls: {
+        rejectUnauthorized: false // Membantu jika ada masalah sertifikat di server
+      },
       debug: true,
       logger: true
     });
@@ -87,11 +90,18 @@ export class MailService {
       </div>
     `;
 
-    await this.transporter.sendMail({
-      from: this.config.get<string>("MAIL_FROM"),
-      to,
-      subject,
-      html
-    });
+    try {
+      const info = await this.transporter.sendMail({
+        from: this.config.get<string>("MAIL_FROM"),
+        to,
+        subject,
+        html
+      });
+      console.log("Email sent successfully:", info.messageId);
+      return info;
+    } catch (err) {
+      console.error("DETAILED MAIL ERROR:", err);
+      throw err;
+    }
   }
 }
