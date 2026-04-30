@@ -99,14 +99,14 @@ export class PaymentService {
         // Update booking status if it's a course
         await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", orderId);
 
-        // Send confirmation email with product/receipt
+        // Send confirmation email with product/receipt (Non-blocking)
         const customerEmail = order.metadata?.attendeeEmail || order.metadata?.buyerEmail;
         if (customerEmail) {
-          try {
-            await this.mailService.sendProductEmail(customerEmail, order);
-          } catch (mailErr) {
-            console.error("Failed to send success email:", mailErr);
-          }
+          // Kita TIDAK menggunakan 'await' di sini agar Midtrans tidak timeout
+          this.mailService
+            .sendProductEmail(customerEmail, order)
+            .then(() => console.log(`Email sent successfully to ${customerEmail}`))
+            .catch((mailErr) => console.error("Failed to send success email in background:", mailErr));
         }
       }
     } else if (status === "cancelled") {
