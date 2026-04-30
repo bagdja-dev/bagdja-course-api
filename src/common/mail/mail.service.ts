@@ -25,6 +25,15 @@ export class MailService {
     });
   }
 
+  private getFromHeader(): string {
+    const name = this.config.get<string>("MAIL_FROM");
+    const user = this.config.get<string>("MAIL_USER");
+    if (name) {
+      return `${name} <${user}>`;
+    }
+    return user!;
+  }
+
   async sendProductEmail(to: string, order: any) {
     const isBook = order.kind === "book";
     const itemsHtml = order.order_items
@@ -92,7 +101,7 @@ export class MailService {
 
     try {
       const info = await this.transporter.sendMail({
-        from: this.config.get<string>("MAIL_FROM"),
+        from: this.getFromHeader(),
         to,
         subject,
         html
