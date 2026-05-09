@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 
 import type { AuthUser } from "@/common/auth/jwt.strategy";
 import { SupabaseService } from "@/common/supabase/supabase.service";
+import { UsersService } from "../users/users.service";
 
 import type { CreateBookCheckoutDto } from "./dto/create-book-checkout.dto";
 import type { CreateCourseCheckoutDto } from "./dto/create-course-checkout.dto";
@@ -55,7 +56,10 @@ type OrderItemRow = {
 
 @Injectable()
 export class CheckoutService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly users: UsersService
+  ) {}
 
   async createCourseCheckout(dto: CreateCourseCheckoutDto, user?: AuthUser) {
     const { data: course, error: courseError } = await this.supabase.db
@@ -87,11 +91,14 @@ export class CheckoutService {
     const subtotal = typedCourse.price * dto.quantity;
     const total = subtotal;
 
-    // Use a special UUID or null for guest users. 
-    // In many systems, we might use a fixed 'GUEST' UUID or just allow null if DB permits.
-    // Based on the migration, user_id is NOT NULL. 
-    // For now, let's use a zero UUID if no user is provided.
-    const finalUserId = user?.userId || "00000000-0000-0000-0000-000000000000";
+    const finalUserId = user!.userId;
+
+    // Ensure user exists locally (lazy sync)
+    await this.users.ensureUserExists({
+      id: finalUserId,
+      email: user?.email,
+      username: user?.username
+    });
 
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")
@@ -167,7 +174,14 @@ export class CheckoutService {
     const subtotal = typedBook.price * dto.quantity;
     const total = subtotal;
 
-    const finalUserId = user?.userId || "00000000-0000-0000-0000-000000000000";
+    const finalUserId = user!.userId;
+
+    // Ensure user exists locally (lazy sync)
+    await this.users.ensureUserExists({
+      id: finalUserId,
+      email: user?.email,
+      username: user?.username
+    });
 
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")

@@ -2,7 +2,6 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 
 import { AuthModule } from "./common/auth/auth.module";
-import { MailModule } from "./common/mail/mail.module";
 import { SupabaseModule } from "./common/supabase/supabase.module";
 import { AdminAuthFeatureModule } from "./modules/admin-auth/admin-auth.module";
 import { AdminModule } from "./modules/admin/admin.module";
@@ -14,13 +13,14 @@ import { HealthModule } from "./modules/health/health.module";
 import { LocationsModule } from "./modules/locations/locations.module";
 import { OrdersModule } from "./modules/orders/orders.module";
 import { PaymentModule } from "./modules/payment/payment.module";
+import { UsersModule } from "./modules/users/users.module";
+import { MessagingModule } from "./modules/users/messaging.module";
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     SupabaseModule,
     AuthModule,
-    MailModule,
     AdminAuthFeatureModule,
     AdminModule,
     HealthModule,
@@ -30,7 +30,9 @@ import { PaymentModule } from "./modules/payment/payment.module";
     LocationsModule,
     CheckoutModule,
     OrdersModule,
-    PaymentModule
+    PaymentModule,
+    UsersModule,
+    MessagingModule
   ]
 })
 export class AppModule {}

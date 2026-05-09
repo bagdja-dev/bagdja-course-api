@@ -11,6 +11,7 @@ import { CreateCourseCheckoutDto } from "./dto/create-course-checkout.dto";
 
 @ApiTags("checkout")
 @Controller("checkout")
+@UseGuards(JwtAuthGuard)
 export class CheckoutController {
   constructor(private readonly checkout: CheckoutService) {}
 

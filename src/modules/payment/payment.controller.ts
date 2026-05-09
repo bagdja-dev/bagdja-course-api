@@ -12,13 +12,29 @@ export class PaymentController {
   @ApiBearerAuth()
   @Post("create-transaction")
   async createTransaction(@Body("orderId") orderId: string) {
+    console.log(`[PaymentController] Creating transaction for Order ID: ${orderId}`);
     return this.paymentService.createTransaction(orderId);
   }
 
   @Post("notification")
   async notification(@Body() notification: any) {
-    console.log("--- MIDTRANS WEBHOOK RECEIVED ---");
-    console.log("Payload:", JSON.stringify(notification, null, 2));
-    return this.paymentService.handleNotification(notification);
+    try {
+      console.log("==========================================");
+      console.log("--- MIDTRANS WEBHOOK RECEIVED ---");
+      console.log("Timestamp:", new Date().toISOString());
+      console.log("Payload:", JSON.stringify(notification, null, 2));
+      console.log("==========================================");
+      
+      const result = await this.paymentService.handleNotification(notification);
+      
+      console.log("--- WEBHOOK PROCESSED SUCCESSFULLY ---");
+      return result;
+    } catch (error: any) {
+      console.error("!!! WEBHOOK PROCESSING ERROR !!!");
+      console.error("Error:", error?.message || error);
+      console.error("Stack:", error?.stack);
+      console.log("==========================================");
+      throw error;
+    }
   }
 }
