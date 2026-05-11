@@ -13,6 +13,7 @@ type CourseRow = {
   title: string;
   mode: "online" | "offline";
   price: number;
+  platform_product_id?: string | null;
 };
 
 type CourseSessionRow = {
@@ -29,6 +30,7 @@ type BookRow = {
   slug: string;
   title: string;
   price: number;
+  platform_product_id?: string | null;
 };
 
 type OrderRow = {
@@ -64,7 +66,7 @@ export class CheckoutService {
   async createCourseCheckout(dto: CreateCourseCheckoutDto, user?: AuthUser) {
     const { data: course, error: courseError } = await this.supabase.db
       .from("courses")
-      .select("id,slug,title,mode,price")
+      .select("id,slug,title,mode,price,platform_product_id")
       .eq("slug", dto.courseSlug)
       .maybeSingle();
     if (courseError) throw courseError;
@@ -113,7 +115,8 @@ export class CheckoutService {
           courseSlug: typedCourse.slug,
           sessionId: typedSession.id,
           locationId: dto.locationId ?? null,
-          attendeeEmail: dto.attendeeEmail
+          attendeeEmail: dto.attendeeEmail,
+          platformProductId: typedCourse.platform_product_id
         }
       })
       .select("*")
@@ -164,7 +167,7 @@ export class CheckoutService {
   async createBookCheckout(dto: CreateBookCheckoutDto, user?: AuthUser) {
     const { data: book, error: bookError } = await this.supabase.db
       .from("books")
-      .select("id,slug,title,price")
+      .select("id,slug,title,price,platform_product_id")
       .eq("slug", dto.bookSlug)
       .maybeSingle();
     if (bookError) throw bookError;
@@ -192,7 +195,11 @@ export class CheckoutService {
         status: "pending",
         subtotal,
         total,
-        metadata: { bookSlug: typedBook.slug, buyerEmail: dto.buyerEmail }
+        metadata: { 
+          bookSlug: typedBook.slug, 
+          buyerEmail: dto.buyerEmail,
+          platformProductId: typedBook.platform_product_id 
+        }
       })
       .select("*")
       .single();

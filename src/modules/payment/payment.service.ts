@@ -1,29 +1,46 @@
-import { Injectable, InternalServerErrorException, NotFoundException, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  UnauthorizedException,
+  Logger,
+  Inject,
+  forwardRef,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 // @ts-ignore
 import * as midtransClient from "midtrans-client";
 
 import { SupabaseService } from "@/common/supabase/supabase.service";
 import { MessagingService } from "../users/messaging.service";
+import { OrdersService } from "../orders/orders.service";
 
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
   private snap: any;
+  private readonly authApiUrl: string;
+  private readonly paymentApiUrl: string;
+  /** Cached client token from POST /auth/client (short-lived) */
+  private clientTokenCache: { token: string; expiresAtMs: number } | null = null;
 
   constructor(
     private readonly config: ConfigService,
     private readonly supabase: SupabaseService,
-    private readonly messagingService: MessagingService
+    private readonly messagingService: MessagingService,
+    @Inject(forwardRef(() => OrdersService))
+    private readonly ordersService: OrdersService
   ) {
     this.snap = new midtransClient.Snap({
       isProduction: this.config.get<string>("MIDTRANS_IS_PRODUCTION") === "true",
       serverKey: this.config.get<string>("MIDTRANS_SERVER_KEY"),
       clientKey: this.config.get<string>("MIDTRANS_CLIENT_KEY")
     });
+    this.authApiUrl = this.config.get<string>("BAGDJA_AUTH_API") || "https://auth.bagdja.com";
+    this.paymentApiUrl = this.config.get<string>("BAGDJA_PAYMENT_API") || "https://payment.bagdja.com";
   }
 
-  async createTransaction(orderId: string) {
+  async createTransaction(orderId: string, authorization?: string) {
     this.logger.log(`Creating transaction for Order: ${orderId}`);
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")
@@ -36,6 +53,14 @@ export class PaymentService {
       throw new NotFoundException("Order not found");
     }
 
+    // If it has platformProductId, use Platform Payment Service
+    if (order.metadata?.platformProductId) {
+      const itemType = order.kind === "course" ? "COURSE" : "EBOOK";
+      this.logger.log(`Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`);
+      return this.createPlatformTransaction(order, itemType, authorization);
+    }
+
+    // Fallback to legacy Midtrans direct for other types (like books)
     const parameter = {
       transaction_details: {
         order_id: order.id,
@@ -64,6 +89,207 @@ export class PaymentService {
       const errorMessage = err?.ApiResponse?.error_messages?.[0] || err.message || "Unknown Midtrans error";
       throw new InternalServerErrorException(`Midtrans Error: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Exchange CLIENT_APP_ID + CLIENT_APP_SECRET for a short-lived x-api-token (Bagdja Auth).
+   */
+  private async getBagdjaClientToken(): Promise<string> {
+    const now = Date.now();
+    if (this.clientTokenCache && this.clientTokenCache.expiresAtMs > now + 60_000) {
+      return this.clientTokenCache.token;
+    }
+
+    const appId = this.config.get<string>("CLIENT_APP_ID");
+    const appSecret = this.config.get<string>("CLIENT_APP_SECRET");
+    if (!appId?.trim() || !appSecret?.trim()) {
+      throw new InternalServerErrorException(
+        "CLIENT_APP_ID and CLIENT_APP_SECRET must be set for platform checkout",
+      );
+    }
+
+    const base = this.authApiUrl.replace(/\/$/, "");
+    const url = `${base}/auth/client`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      this.logger.error(`[AuthClient] POST /auth/client failed: ${res.status} ${text}`);
+      throw new InternalServerErrorException("Failed to obtain Bagdja client token");
+    }
+
+    const data = (await res.json()) as { "x-api-token"?: string; expires_in?: number };
+    const token = data["x-api-token"];
+    if (!token) {
+      throw new InternalServerErrorException("Auth client response missing x-api-token");
+    }
+
+    const expiresInSec =
+      typeof data.expires_in === "number" && Number.isFinite(data.expires_in)
+        ? data.expires_in
+        : 3600;
+    this.clientTokenCache = {
+      token,
+      expiresAtMs: now + expiresInSec * 1000,
+    };
+    return token;
+  }
+
+  async createPlatformTransaction(
+    order: any,
+    itemType: string = "COURSE",
+    authorization?: string,
+  ) {
+    try {
+      const authHeader = authorization?.trim();
+      if (!authHeader?.toLowerCase().startsWith("bearer ")) {
+        throw new UnauthorizedException(
+          "Authorization Bearer (Bagdja user JWT) is required for platform checkout",
+        );
+      }
+
+      const clientToken = await this.getBagdjaClientToken();
+      const frontendUrl = this.config.get<string>("FRONTEND_URL") || "http://localhost:3000";
+
+      const payload = {
+        userId: order.user_id,
+        productId: order.metadata?.platformProductId,
+        itemType: itemType,
+        amount: order.total,
+        successRedirectUrl: `${frontendUrl}/profile?status=success&orderId=${order.id}`,
+        failureRedirectUrl: `${frontendUrl}/checkout?status=failure&orderId=${order.id}`,
+        metadata: {
+          localOrderId: order.id,
+          ...order.metadata,
+        },
+      };
+
+      const targetUrl = `${this.paymentApiUrl}/payments/initialize`;
+      this.logger.debug(`[PlatformRequest] Target URL: ${targetUrl}`);
+      this.logger.debug(`[PlatformRequest] Payload: ${JSON.stringify(payload)}`);
+
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": clientToken,
+          Authorization: authHeader,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        this.logger.error(`[PlatformError] Status: ${response.status} ${response.statusText}`);
+        this.logger.error(`[PlatformError] Response Body: ${errorText}`);
+        
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch (e) {
+          errorData = { message: errorText };
+        }
+        
+        throw new Error(`Platform Error: ${errorData.message || response.statusText}`);
+      }
+
+      const data = await response.json();
+      this.logger.log(`Platform Transaction Initialized: ${data.refNumber}`);
+
+      // Update order with platform refNumber for tracking
+      await this.supabase.db
+        .from("orders")
+        .update({
+          platform_ref_number: data.refNumber,
+        })
+        .eq("id", order.id);
+      
+      return {
+        token: '',
+        redirect_url: data.checkoutUrl as string,
+        refNumber: data.refNumber as string,
+      };
+    } catch (err: any) {
+      this.logger.error("Platform Integration Error:", err);
+      throw new InternalServerErrorException(`Platform Integration Error: ${err.message}`);
+    }
+  }
+
+  async handleBroadcastPaid(payload: {
+    appId?: string;
+    orgId?: string;
+    amount: number;
+    paidAt: string;
+    status: "SUCCESS" | "SETTLEMENT";
+    userId: string;
+    refNumber: string;
+    paymentMethod?: string;
+    authTransactionId?: string;
+  }) {
+    this.logger.log(`[Broadcast] Handling payment.paid for Ref: ${payload.refNumber}`);
+
+    // 1. Find Order
+    const order = await this.ordersService.findOrderById(payload.refNumber);
+    if (!order) {
+      this.logger.error(`[Broadcast] Order not found: ${payload.refNumber}`);
+      throw new NotFoundException(`Order ${payload.refNumber} not found`);
+    }
+
+    if (order.status === "paid") {
+      this.logger.warn(`[Broadcast] Order ${payload.refNumber} is already paid. Skipping.`);
+      return { success: true, message: "Already processed" };
+    }
+
+    // 2. Update Order Status
+    await this.ordersService.updateOrderStatus(order.id, "paid");
+    this.logger.log(`[Broadcast] Order ${order.id} status updated to PAID`);
+
+    // 3. Get User Details for Email
+    const { data: user, error: userError } = await this.supabase.db
+      .from("users")
+      .select("*")
+      .eq("id", order.user_id)
+      .single();
+
+    if (userError || !user) {
+      this.logger.error(`[Broadcast] User not found for order ${order.id}`, userError);
+      // We still return success because the payment part is done
+      return { success: true, message: "Order updated but user not found for email" };
+    }
+
+    // 4. Send Success Email
+    try {
+      const item = order.order_items?.[0] || {};
+      const appName = this.config.get<string>("APP_NAME") || "Bagdja Course";
+      
+      // Calculate duration and expiry (simplified)
+      const duration = order.kind === "course" ? "Lifetime Access" : "Permanent Download";
+      const expiryDate = "Selamanya"; // Or calculate based on product metadata if available
+
+      await this.messagingService.sendEmail(
+        user.email,
+        "OrderSuccess",
+        {
+          username: user.full_name || user.username || "Pelanggan",
+          appName: appName,
+          planName: item.title || "Pesanan Bagdja",
+          price: order.total.toLocaleString("id-ID"),
+          duration: duration,
+          expiryDate: expiryDate
+        },
+        payload.appId
+      );
+      this.logger.log(`[Broadcast] Confirmation email sent to ${user.email}`);
+    } catch (emailErr) {
+      this.logger.error(`[Broadcast] Failed to send confirmation email`, emailErr);
+    }
+
+    return { success: true };
   }
 
   async handleNotification(notification: any) {
@@ -98,7 +324,7 @@ export class PaymentService {
         const { data: order, error: updateError } = await this.supabase.db
           .from("orders")
           .update({ status: "paid" })
-          .eq("id", orderId)
+          .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`)
           .select("*, order_items(*)")
           .single();
 
@@ -107,8 +333,9 @@ export class PaymentService {
         }
 
         if (!updateError && order) {
-          this.logger.log(`Order ${orderId} updated to PAID. Updating bookings...`);
-          await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", orderId);
+          const actualOrderId = order.id;
+          this.logger.log(`Order ${actualOrderId} updated to PAID. Updating bookings...`);
+          await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", actualOrderId);
 
           const customerEmail = order.metadata?.attendeeEmail || order.metadata?.buyerEmail;
           
@@ -131,13 +358,28 @@ export class PaymentService {
               .then(() => this.logger.log(`[PaymentService] Platform Email sent successfully to ${customerEmail}`))
               .catch((mailErr) => this.logger.error("[PaymentService] Failed to send platform email:", mailErr));
           } else {
-            this.logger.warn(`No customer email found for order ${orderId}`);
+            this.logger.warn(`No customer email found for order ${actualOrderId}`);
           }
         }
       } else if (status === "cancelled") {
         this.logger.log(`Order ${orderId} marked as CANCELLED`);
-        await this.supabase.db.from("orders").update({ status: "cancelled" }).eq("id", orderId);
-        await this.supabase.db.from("bookings").update({ status: "cancelled" }).eq("order_id", orderId);
+        // Find the order first to get the correct internal ID if needed, 
+        // but .or should work for update too.
+        await this.supabase.db
+          .from("orders")
+          .update({ status: "cancelled" })
+          .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`);
+        
+        // For bookings, we need the internal UUID. Let's fetch the order if it was a refNumber.
+        const { data: order } = await this.supabase.db
+          .from("orders")
+          .select("id")
+          .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`)
+          .single();
+          
+        if (order) {
+          await this.supabase.db.from("bookings").update({ status: "cancelled" }).eq("order_id", order.id);
+        }
       }
 
       return { status: "ok" };

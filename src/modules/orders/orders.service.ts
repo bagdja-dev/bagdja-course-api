@@ -111,4 +111,25 @@ export class OrdersService {
     const typedItems = (items ?? []) as OrderItemRow[];
     return { data: { order: mapOrder(typedOrder), items: typedItems.map(mapOrderItem) } };
   }
+
+  async findOrderById(id: string) {
+    const { data: order, error } = await this.supabase.db
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw error;
+    return order;
+  }
+
+  async updateOrderStatus(id: string, status: "pending" | "paid" | "cancelled") {
+    const { data, error } = await this.supabase.db
+      .from("orders")
+      .update({ status })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
 }

@@ -1,5 +1,6 @@
-import { Body, Controller, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Post, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import type { Request } from "express";
 
 import { JwtAuthGuard } from "@/common/auth/jwt-auth.guard";
 import { PaymentService } from "./payment.service";
@@ -10,10 +11,17 @@ export class PaymentController {
   constructor(private readonly paymentService: PaymentService) {}
 
   @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
   @Post("create-transaction")
-  async createTransaction(@Body("orderId") orderId: string) {
+  async createTransaction(@Req() req: Request, @Body("orderId") orderId: string) {
     console.log(`[PaymentController] Creating transaction for Order ID: ${orderId}`);
-    return this.paymentService.createTransaction(orderId);
+    const authorization =
+      typeof req.headers.authorization === "string"
+        ? req.headers.authorization
+        : Array.isArray(req.headers.authorization)
+          ? req.headers.authorization[0]
+          : undefined;
+    return this.paymentService.createTransaction(orderId, authorization);
   }
 
   @Post("notification")
@@ -36,5 +44,10 @@ export class PaymentController {
       console.log("==========================================");
       throw error;
     }
+  }
+
+  @Post("broadcast/paid")
+  async handleBroadcastPaid(@Body() payload: any) {
+    return this.paymentService.handleBroadcastPaid(payload);
   }
 }
