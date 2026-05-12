@@ -202,12 +202,18 @@ export class PaymentService {
       this.logger.log(`Platform Transaction Initialized: ${data.refNumber}`);
 
       // Update order with platform refNumber for tracking
-      await this.supabase.db
+      const { error: updateError } = await this.supabase.db
         .from("orders")
         .update({
           platform_ref_number: data.refNumber,
         })
         .eq("id", order.id);
+
+      if (updateError) {
+        this.logger.error(`Failed to update order with platform_ref_number: ${order.id}`, updateError);
+      } else {
+        this.logger.log(`Successfully updated order ${order.id} with platform_ref_number ${data.refNumber}`);
+      }
       
       return {
         token: '',

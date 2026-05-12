@@ -12,6 +12,7 @@ type OrderRow = {
   subtotal: number;
   total: number;
   metadata: Record<string, unknown>;
+  platform_ref_number?: string;
   created_at: string;
 };
 
@@ -35,6 +36,7 @@ type OrderResponse = {
   subtotal: number;
   total: number;
   metadata: Record<string, unknown>;
+  platformRefNumber?: string;
   createdAt: string;
 };
 
@@ -59,6 +61,7 @@ function mapOrder(row: OrderRow): OrderResponse {
     subtotal: row.subtotal,
     total: row.total,
     metadata: row.metadata,
+    platformRefNumber: row.platform_ref_number,
     createdAt: row.created_at
   };
 }
@@ -95,7 +98,7 @@ export class OrdersService {
     const { data: order, error } = await this.supabase.db
       .from("orders")
       .select("*")
-      .eq("id", id)
+      .or(`id.eq.${id},platform_ref_number.eq.${id}`)
       .eq("user_id", user.userId)
       .maybeSingle();
     if (error) throw error;
@@ -116,7 +119,7 @@ export class OrdersService {
     const { data: order, error } = await this.supabase.db
       .from("orders")
       .select("*, order_items(*)")
-      .eq("id", id)
+      .or(`id.eq.${id},platform_ref_number.eq.${id}`)
       .maybeSingle();
     if (error) throw error;
     return order;
