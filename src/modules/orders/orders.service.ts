@@ -95,12 +95,21 @@ export class OrdersService {
   }
 
   async getOrderById(user: AuthUser, id: string) {
-    const { data: order, error } = await this.supabase.db
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    
+    let query = this.supabase.db
       .from("orders")
       .select("*")
-      .or(`id.eq.${id},platform_ref_number.eq.${id}`)
-      .eq("user_id", user.userId)
-      .maybeSingle();
+      .eq("user_id", user.userId);
+
+    if (isUuid) {
+      query = query.or(`id.eq.${id},platform_ref_number.eq.${id}`);
+    } else {
+      query = query.eq("platform_ref_number", id);
+    }
+
+    const { data: order, error } = await query.maybeSingle();
+    
     if (error) throw error;
     if (!order) throw new NotFoundException("Order not found");
     const typedOrder = order as OrderRow;
@@ -116,11 +125,19 @@ export class OrdersService {
   }
 
   async findOrderById(id: string) {
-    const { data: order, error } = await this.supabase.db
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    
+    let query = this.supabase.db
       .from("orders")
-      .select("*, order_items(*)")
-      .or(`id.eq.${id},platform_ref_number.eq.${id}`)
-      .maybeSingle();
+      .select("*, order_items(*)");
+
+    if (isUuid) {
+      query = query.or(`id.eq.${id},platform_ref_number.eq.${id}`);
+    } else {
+      query = query.eq("platform_ref_number", id);
+    }
+
+    const { data: order, error } = await query.maybeSingle();
     if (error) throw error;
     return order;
   }
