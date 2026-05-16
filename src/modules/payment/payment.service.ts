@@ -236,14 +236,21 @@ export class PaymentService {
     refNumber: string;
     paymentMethod?: string;
     authTransactionId?: string;
+    metadata?: {
+      localOrderId?: string;
+      [key: string]: any;
+    };
   }) {
     this.logger.log(`[Broadcast] Handling payment.paid for Ref: ${payload.refNumber}`);
 
-    // 1. Find Order
-    const order = await this.ordersService.findOrderById(payload.refNumber);
+    // 1. Find Order - Try localOrderId from metadata first, then refNumber
+    const orderLookupId = payload.metadata?.localOrderId || payload.refNumber;
+    this.logger.debug(`[Broadcast] Looking up order with ID: ${orderLookupId}`);
+    
+    const order = await this.ordersService.findOrderById(orderLookupId);
     if (!order) {
-      this.logger.error(`[Broadcast] Order not found: ${payload.refNumber}`);
-      throw new NotFoundException(`Order ${payload.refNumber} not found`);
+      this.logger.error(`[Broadcast] Order not found for lookup ID: ${orderLookupId} (refNumber: ${payload.refNumber})`);
+      throw new NotFoundException(`Order ${orderLookupId} not found`);
     }
 
     if (order.status === "paid") {
