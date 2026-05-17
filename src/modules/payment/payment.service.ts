@@ -226,35 +226,27 @@ export class PaymentService {
     }
   }
 
-  async handleBroadcastPaid(payload: {
-    appId?: string;
-    orgId?: string;
-    amount: number;
-    paidAt: string;
-    status: "SUCCESS" | "SETTLEMENT";
-    userId: string;
-    refNumber: string;
-    paymentMethod?: string;
-    authTransactionId?: string;
-    metadata?: {
-      localOrderId?: string;
-      [key: string]: any;
-    };
-  }) {
-    this.logger.log(`[Broadcast] Handling payment.paid for Ref: ${payload.refNumber}`);
+  async handleBroadcastPaid(payload: any) {
+    // Handle both wrapped (Event Hub) and flat structures
+    const eventData = payload.data || payload;
+    const refNumber = eventData.refNumber;
+    const metadata = eventData.metadata;
+    const appId = payload.appId || eventData.appId;
+
+    this.logger.log(`[Broadcast] Handling payment.paid for Ref: ${refNumber}`);
 
     // 1. Find Order - Try localOrderId from metadata first, then refNumber
-    const orderLookupId = payload.metadata?.localOrderId || payload.refNumber;
+    const orderLookupId = metadata?.localOrderId || refNumber;
     this.logger.debug(`[Broadcast] Looking up order with ID: ${orderLookupId}`);
     
     const order = await this.ordersService.findOrderById(orderLookupId);
     if (!order) {
-      this.logger.error(`[Broadcast] Order not found for lookup ID: ${orderLookupId} (refNumber: ${payload.refNumber})`);
+      this.logger.error(`[Broadcast] Order not found for lookup ID: ${orderLookupId} (refNumber: ${refNumber})`);
       throw new NotFoundException(`Order ${orderLookupId} not found`);
     }
 
     if (order.status === "paid") {
-      this.logger.warn(`[Broadcast] Order ${payload.refNumber} is already paid. Skipping.`);
+      this.logger.warn(`[Broadcast] Order ${orderLookupId} is already paid. Skipping.`);
       return { success: true, message: "Already processed" };
     }
 
@@ -295,7 +287,7 @@ export class PaymentService {
           duration: duration,
           expiryDate: expiryDate
         },
-        payload.appId
+        appId
       );
       this.logger.log(`[Broadcast] Confirmation email sent to ${user.email}`);
     } catch (emailErr) {
