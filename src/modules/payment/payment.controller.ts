@@ -48,6 +48,8 @@ export class PaymentController {
 
   @Post("broadcast/paid")
   async handleBroadcastPaid(@Body() payload: any) {
+    console.log("--- BROADCAST PAID RECEIVED ---");
+    console.log("Payload:", JSON.stringify(payload, null, 2));
     return this.paymentService.handleBroadcastPaid(payload);
   }
 }

@@ -227,17 +227,19 @@ export class PaymentService {
   }
 
   async handleBroadcastPaid(payload: any) {
+    this.logger.log(`[Broadcast] Raw Payload: ${JSON.stringify(payload)}`);
+    
     // Handle both wrapped (Event Hub) and flat structures
     const eventData = payload.data || payload;
     const refNumber = eventData.refNumber;
     const metadata = eventData.metadata;
     const appId = payload.appId || eventData.appId;
 
-    this.logger.log(`[Broadcast] Handling payment.paid for Ref: ${refNumber}`);
+    this.logger.log(`[Broadcast] Extracted - Ref: ${refNumber}, Metadata: ${JSON.stringify(metadata)}`);
 
     // 1. Find Order - Try localOrderId from metadata first, then refNumber
     const orderLookupId = metadata?.localOrderId || refNumber;
-    this.logger.debug(`[Broadcast] Looking up order with ID: ${orderLookupId}`);
+    this.logger.log(`[Broadcast] Final Order Lookup ID: ${orderLookupId}`);
     
     const order = await this.ordersService.findOrderById(orderLookupId);
     if (!order) {
