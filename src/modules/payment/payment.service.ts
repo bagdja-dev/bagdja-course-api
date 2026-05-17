@@ -233,11 +233,12 @@ export class PaymentService {
     const eventData = payload.data || payload;
     const refNumber = eventData.refNumber;
     const metadata = eventData.metadata;
+    // Prefer appId from metadata (actual app context) over envelope appId (publisher service)
     const appId =
-      payload?.appId ||
-      eventData?.appId ||
+      metadata?.appId ||
       payload?.metadata?.appId ||
-      eventData?.metadata?.appId;
+      payload?.appId ||
+      eventData?.appId;
 
     this.logger.log(
       `[Broadcast] Extracted - Ref: ${refNumber}, appId: ${appId ?? "(none)"}, Metadata keys: ${
@@ -260,14 +261,27 @@ export class PaymentService {
       throw new NotFoundException(`Order ${orderLookupId} not found`);
     }
 
-    if (order.status === "paid") {
-      this.logger.warn(`[Broadcast] Order ${orderLookupId} is already paid. Skipping.`);
+    const alreadyPaid = order.status === "paid";
+    const emailSentAt = order.metadata?.emailSentAt as string | undefined;
+    if (alreadyPaid && emailSentAt) {
+      this.logger.warn(
+        `[Broadcast] Order ${orderLookupId} is already paid and emailSentAt=${emailSentAt}. Skipping email.`,
+      );
       return { success: true, message: "Already processed" };
+    }
+    if (alreadyPaid && !emailSentAt) {
+      this.logger.warn(
+        `[Broadcast] Order ${orderLookupId} is already paid but no emailSentAt found. Will attempt to send email.`,
+      );
     }
 
     // 2. Update Order Status
-    await this.ordersService.updateOrderStatus(order.id, "paid");
-    this.logger.log(`[Broadcast] Order ${order.id} status updated to PAID`);
+    if (!alreadyPaid) {
+      await this.ordersService.updateOrderStatus(order.id, "paid");
+      this.logger.log(`[Broadcast] Order ${order.id} status updated to PAID`);
+    } else {
+      this.logger.log(`[Broadcast] Order ${order.id} status already PAID; not updating status`);
+    }
 
     // 3. Get User Details for Email
     const { data: user, error: userError } = await this.supabase.db
@@ -311,6 +325,27 @@ export class PaymentService {
         appId
       );
       this.logger.log(`[Broadcast] Confirmation email sent to ${user.email}`);
+
+      // Mark as sent to make this handler idempotent for email side-effect
+      try {
+        const nextMetadata = {
+          ...(order.metadata ?? {}),
+          emailSentAt: new Date().toISOString(),
+          emailTemplate: "OrderSuccess",
+          emailAppId: appId ?? null,
+        };
+        const { error: metaErr } = await this.supabase.db
+          .from("orders")
+          .update({ metadata: nextMetadata })
+          .eq("id", order.id);
+        if (metaErr) {
+          this.logger.error(`[Broadcast] Failed to persist emailSentAt for order ${order.id}`, metaErr);
+        } else {
+          this.logger.log(`[Broadcast] Persisted emailSentAt for order ${order.id}`);
+        }
+      } catch (persistErr) {
+        this.logger.error(`[Broadcast] Failed to persist emailSentAt (unexpected)`, persistErr as any);
+      }
     } catch (emailErr) {
       this.logger.error(`[Broadcast] Failed to send confirmation email`, emailErr);
     }
