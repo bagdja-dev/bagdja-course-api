@@ -8,7 +8,7 @@ import {
   forwardRef,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-// @ts-ignore
+// @ts-expect-error midtrans-client has imperfect TS typings in our setup
 import * as midtransClient from "midtrans-client";
 
 import { SupabaseService } from "@/common/supabase/supabase.service";
@@ -233,9 +233,22 @@ export class PaymentService {
     const eventData = payload.data || payload;
     const refNumber = eventData.refNumber;
     const metadata = eventData.metadata;
-    const appId = payload.appId || eventData.appId;
+    const appId =
+      payload?.appId ||
+      eventData?.appId ||
+      payload?.metadata?.appId ||
+      eventData?.metadata?.appId;
 
-    this.logger.log(`[Broadcast] Extracted - Ref: ${refNumber}, Metadata: ${JSON.stringify(metadata)}`);
+    this.logger.log(
+      `[Broadcast] Extracted - Ref: ${refNumber}, appId: ${appId ?? "(none)"}, Metadata keys: ${
+        metadata && typeof metadata === "object" ? Object.keys(metadata).join(",") : "(none)"
+      }`
+    );
+
+    if (!refNumber) {
+      this.logger.error(`[Broadcast] Missing refNumber in payload`);
+      throw new NotFoundException("Missing refNumber");
+    }
 
     // 1. Find Order - Try localOrderId from metadata first, then refNumber
     const orderLookupId = metadata?.localOrderId || refNumber;
@@ -277,6 +290,12 @@ export class PaymentService {
       // Calculate duration and expiry (simplified)
       const duration = order.kind === "course" ? "Lifetime Access" : "Permanent Download";
       const expiryDate = "Selamanya"; // Or calculate based on product metadata if available
+
+      this.logger.log(
+        `[Broadcast] Sending email via MessagingService: to=${user.email}, template=OrderSuccess, appId=${
+          appId ?? "(none)"
+        }, orderId=${order.id}, kind=${order.kind}`
+      );
 
       await this.messagingService.sendEmail(
         user.email,
