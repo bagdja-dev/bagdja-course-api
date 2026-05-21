@@ -55,9 +55,8 @@ export class PaymentService {
 
     // If it has platformProductId, use Platform Payment Service
     if (order.metadata?.platformProductId) {
-      const itemType = order.kind === "course" ? "COURSE" : "EBOOK";
       this.logger.log(`Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`);
-      return this.createPlatformTransaction(order, itemType, authorization);
+      return this.createPlatformTransaction(order, "PRODUCT", authorization);
     }
 
     // Fallback to legacy Midtrans direct for other types (like books)
@@ -142,7 +141,7 @@ export class PaymentService {
 
   async createPlatformTransaction(
     order: any,
-    itemType: string = "COURSE",
+    itemType: string = "PRODUCT",
     authorization?: string,
   ) {
     try {
@@ -158,7 +157,7 @@ export class PaymentService {
 
       const payload = {
         userId: order.user_id,
-        productId: order.metadata?.platformProductId,
+        itemId: order.metadata?.platformProductId,
         itemType: itemType,
         amount: order.total,
         successRedirectUrl: `${frontendUrl}/profile?status=success&orderId=${order.id}`,
