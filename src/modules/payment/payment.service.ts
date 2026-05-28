@@ -3,7 +3,6 @@ import {
   InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
-  Logger,
   Inject,
   forwardRef,
 } from "@nestjs/common";
@@ -11,13 +10,14 @@ import { ConfigService } from "@nestjs/config";
 // @ts-expect-error midtrans-client has imperfect TS typings in our setup
 import * as midtransClient from "midtrans-client";
 
+import { BagdjaLogger } from "@bagdja/node-sdk";
 import { SupabaseService } from "@/common/supabase/supabase.service";
 import { MessagingService } from "../users/messaging.service";
 import { OrdersService } from "../orders/orders.service";
 
 @Injectable()
 export class PaymentService {
-  private readonly logger = new Logger(PaymentService.name);
+  private readonly logger: BagdjaLogger;
   private snap: any;
   private readonly authApiUrl: string;
   private readonly paymentApiUrl: string;
@@ -29,8 +29,13 @@ export class PaymentService {
     private readonly supabase: SupabaseService,
     private readonly messagingService: MessagingService,
     @Inject(forwardRef(() => OrdersService))
-    private readonly ordersService: OrdersService
+    private readonly ordersService: OrdersService,
+    logger: BagdjaLogger,
   ) {
+    this.logger = logger;
+    const defaultAppId = this.config.get<string>("CLIENT_APP_ID") || "books-and-course-store";
+    const defaultOrgId = this.config.get<string>("BAGDJA_ORG_ID") || "system";
+    this.logger.init(defaultAppId, defaultOrgId);
     this.snap = new midtransClient.Snap({
       isProduction: this.config.get<string>("MIDTRANS_IS_PRODUCTION") === "true",
       serverKey: this.config.get<string>("MIDTRANS_SERVER_KEY"),
@@ -49,13 +54,17 @@ export class PaymentService {
       .single();
 
     if (orderError || !order) {
-      this.logger.error(`Order not found: ${orderId}`, orderError);
+      this.logger.bagdjaLog('error', `Order not found: ${orderId}`, {
+        data: { orderId, error: orderError },
+      });
       throw new NotFoundException("Order not found");
     }
 
     // If it has platformProductId, use Platform Payment Service
     if (order.metadata?.platformProductId) {
-      this.logger.log(`Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`);
+      this.logger.bagdjaLog('info', `Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`, {
+        data: { orderId, kind: order.kind },
+      });
       return this.createPlatformTransaction(order, "PRODUCT", authorization);
     }
 
@@ -84,7 +93,9 @@ export class PaymentService {
         redirect_url: transaction.redirect_url
       };
     } catch (err: any) {
-      this.logger.error("Midtrans Error Detail:", err);
+      this.logger.bagdjaLog('error', "Midtrans Error Detail", {
+        data: { error: err },
+      });
       const errorMessage = err?.ApiResponse?.error_messages?.[0] || err.message || "Unknown Midtrans error";
       throw new InternalServerErrorException(`Midtrans Error: ${errorMessage}`);
     }
@@ -169,8 +180,12 @@ export class PaymentService {
       };
 
       const targetUrl = `${this.paymentApiUrl}/payments/initialize`;
-      this.logger.debug(`[PlatformRequest] Target URL: ${targetUrl}`);
-      this.logger.debug(`[PlatformRequest] Payload: ${JSON.stringify(payload)}`);
+      this.logger.bagdjaLog('debug', `[PlatformRequest] Target URL: ${targetUrl}`, {
+        data: { targetUrl },
+      });
+      this.logger.bagdjaLog('debug', `[PlatformRequest] Payload prepared`, {
+        data: payload,
+      });
 
       const response = await fetch(targetUrl, {
         method: "POST",
@@ -184,8 +199,12 @@ export class PaymentService {
 
       if (!response.ok) {
         const errorText = await response.text();
-        this.logger.error(`[PlatformError] Status: ${response.status} ${response.statusText}`);
-        this.logger.error(`[PlatformError] Response Body: ${errorText}`);
+this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${response.statusText}`, {
+        data: { responseBody: errorText },
+      });
+      this.logger.bagdjaLog('error', `[PlatformError] Response Body`, {
+        data: { errorText },
+      });
         
         let errorData;
         try {
@@ -198,7 +217,9 @@ export class PaymentService {
       }
 
       const data = await response.json();
-      this.logger.log(`Platform Transaction Initialized: ${data.refNumber}`);
+      this.logger.bagdjaLog('info', `Platform Transaction Initialized: ${data.refNumber}`, {
+        data: { refNumber: data.refNumber, checkoutUrl: data.checkoutUrl },
+      });
 
       // Update order with platform refNumber for tracking
       const { error: updateError } = await this.supabase.db
@@ -209,9 +230,13 @@ export class PaymentService {
         .eq("id", order.id);
 
       if (updateError) {
-        this.logger.error(`Failed to update order with platform_ref_number: ${order.id}`, updateError);
+        this.logger.bagdjaLog('error', `Failed to update order with platform_ref_number: ${order.id}`, {
+          data: { updateError },
+        });
       } else {
-        this.logger.log(`Successfully updated order ${order.id} with platform_ref_number ${data.refNumber}`);
+        this.logger.bagdjaLog('info', `Successfully updated order ${order.id} with platform_ref_number ${data.refNumber}`, {
+          data: { orderId: order.id, refNumber: data.refNumber },
+        });
       }
       
       return {

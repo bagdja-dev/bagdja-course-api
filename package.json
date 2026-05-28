@@ -23,6 +23,7 @@
     "@nestjs/platform-express": "^10.4.0",
     "@nestjs/swagger": "^7.4.2",
     "@supabase/supabase-js": "^2.49.1",
+    "@bagdja/node-sdk": "file:../../../core/bagdja-node-sdk",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "midtrans-client": "^1.4.3",

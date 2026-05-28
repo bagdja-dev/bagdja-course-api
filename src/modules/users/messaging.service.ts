@@ -1,5 +1,6 @@
 import { Injectable, InternalServerErrorException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { BagdjaLogger } from "@bagdja/node-sdk";
 
 @Injectable()
 export class MessagingService {
@@ -9,7 +10,10 @@ export class MessagingService {
   private readonly clientAppSecret: string;
   private tokenCache: { token: string; expiresAt: number } | null = null;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(private readonly config: ConfigService, private readonly logger: BagdjaLogger) {
+    const defaultAppId = this.config.get<string>("CLIENT_APP_ID") || "books-and-course-store";
+    const defaultOrgId = this.config.get<string>("BAGDJA_ORG_ID") || "system";
+    this.logger.init(defaultAppId, defaultOrgId);
     this.apiUrl = this.config.get<string>("BAGDJA_MESSAGE_API") || "https://message.bagdja.com";
     this.authApiUrl = this.config.get<string>("BAGDJA_AUTH_API") || "https://auth.bagdja.com";
     this.clientAppId = this.config.get<string>("CLIENT_APP_ID") || "";
@@ -58,7 +62,9 @@ export class MessagingService {
       const token = await this.getAuthToken();
       const url = `${this.apiUrl.replace(/\/$/, "")}/messages/email/send`;
       
-      console.log(`[MessagingService] Sending email to: ${to}, template: ${template}, appId: ${appId ?? "(none)"}`);
+      this.logger.bagdjaLog('info', 'Sending email request', {
+        data: { to, template, appId, url },
+      });
       
       const payload: any = { to, template, context };
       if (appId) payload.appId = appId;
@@ -73,8 +79,9 @@ export class MessagingService {
       });
 
       const rawText = await response.text();
-      console.log(`[MessagingService] Response status: ${response.status} ${response.statusText}`);
-      console.log(`[MessagingService] Response body: ${rawText || "(empty)"}`);
+      this.logger.bagdjaLog('debug', 'Messaging API response received', {
+        data: { status: response.status, statusText: response.statusText, body: rawText },
+      });
 
       if (!response.ok) {
         let errorData: any = {};
@@ -83,15 +90,21 @@ export class MessagingService {
         } catch {
           errorData = { message: rawText };
         }
-        console.error(`[MessagingService] API Error Response:`, errorData);
+        this.logger.bagdjaLog('error', 'Messaging API Error Response', {
+          data: { errorData, status: response.status },
+        });
         throw new Error(errorData.message || `Messaging API Error: ${response.statusText}`);
       }
 
       const result = rawText ? JSON.parse(rawText) : {};
-      console.log(`[MessagingService] Success Result:`, result);
+      this.logger.bagdjaLog('info', 'Messaging API request succeeded', {
+        data: result,
+      });
       return result;
     } catch (err) {
-      console.error("[MessagingService] Catch Error:", err);
+      this.logger.bagdjaLog('error', 'MessagingService caught error', {
+        data: { error: err instanceof Error ? err.message : err },
+      });
       throw new InternalServerErrorException(err instanceof Error ? err.message : "Unknown error in messaging");
     }
   }
