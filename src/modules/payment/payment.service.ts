@@ -46,6 +46,9 @@ export class PaymentService {
   }
 
   async createTransaction(orderId: string, authorization?: string) {
+    this.logger.bagdjaLog('info', 'Create payment request started', {
+      data: { orderId, authorizationProvided: Boolean(authorization) },
+    });
     this.logger.log(`Creating transaction for Order: ${orderId}`);
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")
@@ -406,6 +409,10 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
       this.logger.log(`Order ${orderId} status determined: ${status}`);
 
       if (status === "paid") {
+        this.logger.bagdjaLog('info', 'Payment success received', {
+          data: { orderId, transactionStatus, fraudStatus },
+        });
+
         const { data: order, error: updateError } = await this.supabase.db
           .from("orders")
           .update({ status: "paid" })
