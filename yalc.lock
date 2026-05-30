@@ -1,0 +1,9 @@
+{
+  "version": "v1",
+  "packages": {
+    "@bagdja/node-sdk": {
+      "signature": "0527fc1fabfb16014ea6370a588dd065",
+      "replaced": "^0.1.7"
+    }
+  }
+}

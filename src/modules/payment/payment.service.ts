@@ -46,10 +46,10 @@ export class PaymentService {
   }
 
   async createTransaction(orderId: string, authorization?: string) {
-    this.logger.bagdjaLog('info', 'Create payment request started', {
+    this.logger.info('Create payment request started', {
       data: { orderId, authorizationProvided: Boolean(authorization) },
     });
-    this.logger.log(`Creating transaction for Order: ${orderId}`);
+    this.logger.info(`Creating transaction for Order: ${orderId}`);
     const { data: order, error: orderError } = await this.supabase.db
       .from("orders")
       .select("*, order_items(*)")
@@ -57,7 +57,7 @@ export class PaymentService {
       .single();
 
     if (orderError || !order) {
-      this.logger.bagdjaLog('error', `Order not found: ${orderId}`, {
+      this.logger.fail(`Order not found: ${orderId}`, {
         data: { orderId, error: orderError },
       });
       throw new NotFoundException("Order not found");
@@ -65,7 +65,7 @@ export class PaymentService {
 
     // If it has platformProductId, use Platform Payment Service
     if (order.metadata?.platformProductId) {
-      this.logger.bagdjaLog('info', `Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`, {
+      this.logger.info(`Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`, {
         data: { orderId, kind: order.kind },
       });
       return this.createPlatformTransaction(order, "PRODUCT", authorization);
@@ -90,13 +90,13 @@ export class PaymentService {
 
     try {
       const transaction = await this.snap.createTransaction(parameter);
-      this.logger.log(`Midtrans Transaction Created: ${transaction.token}`);
+      this.logger.info(`Midtrans Transaction Created: ${transaction.token}`);
       return {
         token: transaction.token,
         redirect_url: transaction.redirect_url
       };
     } catch (err: any) {
-      this.logger.bagdjaLog('error', "Midtrans Error Detail", {
+      this.logger.fail("Midtrans Error Detail", {
         data: { error: err },
       });
       const errorMessage = err?.ApiResponse?.error_messages?.[0] || err.message || "Unknown Midtrans error";
@@ -183,7 +183,7 @@ export class PaymentService {
       };
 
       const targetUrl = `${this.paymentApiUrl}/payments/initialize`;
-      this.logger.bagdjaLog('debug', `[PlatformRequest] Target URL: ${targetUrl}`, {
+      this.logger.info(`[PlatformRequest] initialize transaction ${order.id} to ${targetUrl}`, {
         data: { targetUrl },
       });
       this.logger.bagdjaLog('debug', `[PlatformRequest] Payload prepared`, {
@@ -202,25 +202,25 @@ export class PaymentService {
 
       if (!response.ok) {
         const errorText = await response.text();
-this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${response.statusText}`, {
-        data: { responseBody: errorText },
-      });
-      this.logger.bagdjaLog('error', `[PlatformError] Response Body`, {
-        data: { errorText },
-      });
-        
+        this.logger.fail(`[PlatformError] Status: ${response.status} ${response.statusText}`, {
+          data: { responseBody: errorText },
+        });
+        this.logger.fail(`[PlatformError] Response Body`, {
+          data: { errorText },
+        });
+
         let errorData;
         try {
           errorData = JSON.parse(errorText);
         } catch (e) {
           errorData = { message: errorText };
         }
-        
+
         throw new Error(`Platform Error: ${errorData.message || response.statusText}`);
       }
 
       const data = await response.json();
-      this.logger.bagdjaLog('info', `Platform Transaction Initialized: ${data.refNumber}`, {
+      this.logger.info(`Platform Transaction Initialized: ${data.refNumber}`, {
         data: { refNumber: data.refNumber, checkoutUrl: data.checkoutUrl },
       });
 
@@ -233,29 +233,31 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
         .eq("id", order.id);
 
       if (updateError) {
-        this.logger.bagdjaLog('error', `Failed to update order with platform_ref_number: ${order.id}`, {
+        this.logger.error(`Failed to update order with platform_ref_number: ${order.id}`, {
           data: { updateError },
         });
       } else {
-        this.logger.bagdjaLog('info', `Successfully updated order ${order.id} with platform_ref_number ${data.refNumber}`, {
+        this.logger.info(`Successfully updated order ${order.id} with platform_ref_number ${data.refNumber}`, {
           data: { orderId: order.id, refNumber: data.refNumber },
         });
       }
-      
+
       return {
         token: '',
         redirect_url: data.checkoutUrl as string,
         refNumber: data.refNumber as string,
       };
     } catch (err: any) {
-      this.logger.error("Platform Integration Error:", err);
+      this.logger.fail("Platform Integration Error:", err);
       throw new InternalServerErrorException(`Platform Integration Error: ${err.message}`);
     }
   }
 
+
+
   async handleBroadcastPaid(payload: any) {
-    this.logger.log(`[Broadcast] Raw Payload: ${JSON.stringify(payload)}`);
-    
+    this.logger.info(`[Broadcast] Raw Payload: ${JSON.stringify(payload)}`);
+
     // Handle both wrapped (Event Hub) and flat structures
     const eventData = payload.data || payload;
     const refNumber = eventData.refNumber;
@@ -267,24 +269,23 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
       payload?.appId ||
       eventData?.appId;
 
-    this.logger.log(
-      `[Broadcast] Extracted - Ref: ${refNumber}, appId: ${appId ?? "(none)"}, Metadata keys: ${
-        metadata && typeof metadata === "object" ? Object.keys(metadata).join(",") : "(none)"
+    this.logger.info(
+      `[Broadcast] Extracted - Ref: ${refNumber}, appId: ${appId ?? "(none)"}, Metadata keys: ${metadata && typeof metadata === "object" ? Object.keys(metadata).join(",") : "(none)"
       }`
     );
 
     if (!refNumber) {
-      this.logger.error(`[Broadcast] Missing refNumber in payload`);
+      this.logger.fail(`[Broadcast] Missing refNumber in payload`);
       throw new NotFoundException("Missing refNumber");
     }
 
     // 1. Find Order - Try localOrderId from metadata first, then refNumber
     const orderLookupId = metadata?.localOrderId || refNumber;
-    this.logger.log(`[Broadcast] Final Order Lookup ID: ${orderLookupId}`);
-    
+    this.logger.info(`[Broadcast] Final Order Lookup ID: ${orderLookupId}`);
+
     const order = await this.ordersService.findOrderById(orderLookupId);
     if (!order) {
-      this.logger.error(`[Broadcast] Order not found for lookup ID: ${orderLookupId} (refNumber: ${refNumber})`);
+      this.logger.fail(`[Broadcast] Order not found for lookup ID: ${orderLookupId} (refNumber: ${refNumber})`);
       throw new NotFoundException(`Order ${orderLookupId} not found`);
     }
 
@@ -305,9 +306,9 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
     // 2. Update Order Status
     if (!alreadyPaid) {
       await this.ordersService.updateOrderStatus(order.id, "paid");
-      this.logger.log(`[Broadcast] Order ${order.id} status updated to PAID`);
+      this.logger.info(`[Broadcast] Order ${order.id} status updated to PAID`);
     } else {
-      this.logger.log(`[Broadcast] Order ${order.id} status already PAID; not updating status`);
+      this.logger.info(`[Broadcast] Order ${order.id} status already PAID; not updating status`);
     }
 
     // 3. Get User Details for Email
@@ -318,7 +319,9 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
       .single();
 
     if (userError || !user) {
-      this.logger.error(`[Broadcast] User not found for order ${order.id}`, userError);
+      this.logger.fail(`[Broadcast] User not found for order ${order.id}`, {
+        data: { userError },
+      });
       // We still return success because the payment part is done
       return { success: true, message: "Order updated but user not found for email" };
     }
@@ -327,14 +330,13 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
     try {
       const item = order.order_items?.[0] || {};
       const appName = this.config.get<string>("APP_NAME") || "Bagdja Course";
-      
+
       // Calculate duration and expiry (simplified)
       const duration = order.kind === "course" ? "Lifetime Access" : "Permanent Download";
       const expiryDate = "Selamanya"; // Or calculate based on product metadata if available
 
-      this.logger.log(
-        `[Broadcast] Sending email via MessagingService: to=${user.email}, template=OrderSuccess, appId=${
-          appId ?? "(none)"
+      this.logger.info(
+        `[Broadcast] Sending email via MessagingService: to=${user.email}, template=OrderSuccess, appId=${appId ?? "(none)"
         }, orderId=${order.id}, kind=${order.kind}`
       );
 
@@ -351,7 +353,7 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
         },
         appId
       );
-      this.logger.log(`[Broadcast] Confirmation email sent to ${user.email}`);
+      this.logger.info(`[Broadcast] Confirmation email sent to ${user.email}`);
 
       // Mark as sent to make this handler idempotent for email side-effect
       try {
@@ -366,26 +368,30 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
           .update({ metadata: nextMetadata })
           .eq("id", order.id);
         if (metaErr) {
-          this.logger.error(`[Broadcast] Failed to persist emailSentAt for order ${order.id}`, metaErr);
+          this.logger.fail(`[Broadcast] Failed to persist emailSentAt for order ${order.id}`, {
+            data: { metaErr },
+          });
         } else {
-          this.logger.log(`[Broadcast] Persisted emailSentAt for order ${order.id}`);
+          this.logger.info(`[Broadcast] Persisted emailSentAt for order ${order.id}`);
         }
       } catch (persistErr) {
-        this.logger.error(`[Broadcast] Failed to persist emailSentAt (unexpected)`, persistErr as any);
+        this.logger.fail(`[Broadcast] Failed to persist emailSentAt (unexpected)`, persistErr as any);
       }
     } catch (emailErr) {
-      this.logger.error(`[Broadcast] Failed to send confirmation email`, emailErr);
+      this.logger.fail(`[Broadcast] Failed to send confirmation email`, {
+        data: { emailErr },
+      });
     }
 
     return { success: true };
   }
 
   async handleNotification(notification: any) {
-    this.logger.log("Received notification from Midtrans");
+    this.logger.info("Received notification from Midtrans");WSH
     try {
       const statusResponse = await this.snap.transaction.notification(notification);
       this.logger.debug(`Midtrans Status Response: ${JSON.stringify(statusResponse)}`);
-      
+
       const orderId = statusResponse.order_id;
       const transactionStatus = statusResponse.transaction_status;
       const fraudStatus = statusResponse.fraud_status;
@@ -406,10 +412,10 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
         status = "pending";
       }
 
-      this.logger.log(`Order ${orderId} status determined: ${status}`);
+      this.logger.info(`Order ${orderId} status determined: ${status}`);
 
       if (status === "paid") {
-        this.logger.bagdjaLog('info', 'Payment success received', {
+        this.logger.info('Payment success received', {
           data: { orderId, transactionStatus, fraudStatus },
         });
 
@@ -421,20 +427,22 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
           .single();
 
         if (updateError) {
-          this.logger.error(`Failed to update order ${orderId} to paid`, updateError);
+          this.logger.fail(`Failed to update order ${orderId} to paid`, {
+            data: { updateError },
+          });
         }
 
         if (!updateError && order) {
           const actualOrderId = order.id;
-          this.logger.log(`Order ${actualOrderId} updated to PAID. Updating bookings...`);
+          this.logger.info(`Order ${actualOrderId} updated to PAID. Updating bookings...`);
           await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", actualOrderId);
 
           const customerEmail = order.metadata?.attendeeEmail || order.metadata?.buyerEmail;
-          
+
           if (customerEmail) {
             const isBook = order.kind === "book";
             const templateName = "OrderSuccess";
-            
+
             const context = {
               username: order.metadata?.attendeeName || "Customer",
               planName: order.order_items[0]?.title || (isBook ? "E-Book" : "Course"),
@@ -444,31 +452,35 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
               appName: "Bagdja Course"
             };
 
-            this.logger.log(`[PaymentService] Triggering email to ${customerEmail} using template ${templateName}`);
+            this.logger.info(`[PaymentService] Triggering email to ${customerEmail} using template ${templateName}`, {
+              data: { context },
+            });
             this.messagingService
               .sendEmail(customerEmail, templateName, context, "books-and-course-store")
-              .then(() => this.logger.log(`[PaymentService] Platform Email sent successfully to ${customerEmail}`))
-              .catch((mailErr) => this.logger.error("[PaymentService] Failed to send platform email:", mailErr));
+              .then(() => this.logger.info(`[PaymentService] Platform Email sent successfully to ${customerEmail}`))
+              .catch((mailErr) => this.logger.fail("[PaymentService] Failed to send platform email:", {
+                data: { mailErr },
+              }));
           } else {
             this.logger.warn(`No customer email found for order ${actualOrderId}`);
           }
         }
       } else if (status === "cancelled") {
-        this.logger.log(`Order ${orderId} marked as CANCELLED`);
+        this.logger.info(`Order ${orderId} marked as CANCELLED`);
         // Find the order first to get the correct internal ID if needed, 
         // but .or should work for update too.
         await this.supabase.db
           .from("orders")
           .update({ status: "cancelled" })
           .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`);
-        
+
         // For bookings, we need the internal UUID. Let's fetch the order if it was a refNumber.
         const { data: order } = await this.supabase.db
           .from("orders")
           .select("id")
           .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`)
           .single();
-          
+
         if (order) {
           await this.supabase.db.from("bookings").update({ status: "cancelled" }).eq("order_id", order.id);
         }
@@ -476,7 +488,9 @@ this.logger.bagdjaLog('error', `[PlatformError] Status: ${response.status} ${res
 
       return { status: "ok" };
     } catch (error) {
-      this.logger.error("Error handling Midtrans notification", error);
+      this.logger.fail("Error handling Midtrans notification", {
+        data: { error },
+      });
       throw error;
     }
   }
