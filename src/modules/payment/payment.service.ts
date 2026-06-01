@@ -224,6 +224,19 @@ export class PaymentService {
         data: { refNumber: data.refNumber, checkoutUrl: data.checkoutUrl },
       });
 
+      let checkoutUrl = String(data.checkoutUrl || "");
+      const tokenMatch = authHeader?.match(/^Bearer\s+(.+)$/i);
+      const authToken = tokenMatch?.[1];
+      if (authToken) {
+        try {
+          const url = new URL(checkoutUrl);
+          url.searchParams.set("auth_token", authToken);
+          checkoutUrl = url.toString();
+        } catch {
+          this.logger.warn("Unable to append auth_token to checkoutUrl", { checkoutUrl });
+        }
+      }
+
       // Update order with platform refNumber for tracking
       const { error: updateError } = await this.supabase.db
         .from("orders")
@@ -244,7 +257,7 @@ export class PaymentService {
 
       return {
         token: '',
-        redirect_url: data.checkoutUrl as string,
+        redirect_url: checkoutUrl,
         refNumber: data.refNumber as string,
       };
     } catch (err: any) {
