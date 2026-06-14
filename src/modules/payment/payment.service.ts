@@ -7,8 +7,6 @@ import {
   forwardRef,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-// @ts-expect-error midtrans-client has imperfect TS typings in our setup
-import * as midtransClient from "midtrans-client";
 
 import { BagdjaLogger } from "@bagdja/node-sdk";
 import { SupabaseService } from "@/common/supabase/supabase.service";
@@ -18,7 +16,6 @@ import { OrdersService } from "../orders/orders.service";
 @Injectable()
 export class PaymentService {
   private readonly logger: BagdjaLogger;
-  private snap: any;
   private readonly authApiUrl: string;
   private readonly paymentApiUrl: string;
   /** Cached client token from POST /auth/client (short-lived) */
@@ -36,11 +33,6 @@ export class PaymentService {
     const defaultAppId = this.config.get<string>("CLIENT_APP_ID") || "books-and-course-store";
     const defaultOrgId = this.config.get<string>("BAGDJA_ORG_ID") || "system";
     this.logger.init(defaultAppId, defaultOrgId);
-    this.snap = new midtransClient.Snap({
-      isProduction: this.config.get<string>("MIDTRANS_IS_PRODUCTION") === "true",
-      serverKey: this.config.get<string>("MIDTRANS_SERVER_KEY"),
-      clientKey: this.config.get<string>("MIDTRANS_CLIENT_KEY")
-    });
     this.authApiUrl = this.config.get<string>("BAGDJA_AUTH_API") || "https://auth.bagdja.com";
     this.paymentApiUrl = this.config.get<string>("BAGDJA_PAYMENT_API") || "https://payment.bagdja.com";
   }
@@ -63,45 +55,13 @@ export class PaymentService {
       throw new NotFoundException("Order not found");
     }
 
-    // If it has platformProductId, use Platform Payment Service
-    if (order.metadata?.platformProductId) {
-      this.logger.info(`Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`, {
-        data: { orderId, kind: order.kind },
-      });
-      return this.createPlatformTransaction(order, "PRODUCT", authorization);
+    if (!order.metadata?.platformProductId) {
+      throw new InternalServerErrorException("Order has no platformProductId");
     }
-
-    // Fallback to legacy Midtrans direct for other types (like books)
-    const parameter = {
-      transaction_details: {
-        order_id: order.id,
-        gross_amount: order.total
-      },
-      item_details: order.order_items.map((item: any) => ({
-        id: item.product_slug,
-        price: item.unit_price,
-        quantity: item.quantity,
-        name: item.title
-      })),
-      customer_details: {
-        email: order.metadata?.attendeeEmail || order.metadata?.buyerEmail || ""
-      }
-    };
-
-    try {
-      const transaction = await this.snap.createTransaction(parameter);
-      this.logger.info(`Midtrans Transaction Created: ${transaction.token}`);
-      return {
-        token: transaction.token,
-        redirect_url: transaction.redirect_url
-      };
-    } catch (err: any) {
-      this.logger.fail("Midtrans Error Detail", {
-        data: { error: err },
-      });
-      const errorMessage = err?.ApiResponse?.error_messages?.[0] || err.message || "Unknown Midtrans error";
-      throw new InternalServerErrorException(`Midtrans Error: ${errorMessage}`);
-    }
+    this.logger.info(`Routing ${order.kind} transaction ${orderId} to Bagdja Platform...`, {
+      data: { orderId, kind: order.kind },
+    });
+    return this.createPlatformTransaction(order, "PRODUCT", authorization);
   }
 
   /**
@@ -124,19 +84,19 @@ export class PaymentService {
     const base = this.authApiUrl.replace(/\/$/, "");
     const url = `${base}/auth/client`;
 
-    const res = await fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      this.logger.error(`[AuthClient] POST /auth/client failed: ${res.status} ${text}`);
+    if (!response.ok) {
+      const text = await response.text();
+      this.logger.error(`[AuthClient] POST /auth/client failed: ${response.status} ${text}`);
       throw new InternalServerErrorException("Failed to obtain Bagdja client token");
     }
 
-    const data = (await res.json()) as { "x-api-token"?: string; expires_in?: number };
+    const data = (await response.json()) as { "x-api-token"?: string; expires_in?: number };
     const token = data["x-api-token"];
     if (!token) {
       throw new InternalServerErrorException("Auth client response missing x-api-token");
@@ -153,7 +113,7 @@ export class PaymentService {
     return token;
   }
 
-  async createPlatformTransaction(
+  private async createPlatformTransaction(
     order: any,
     itemType: string = "PRODUCT",
     authorization?: string,
@@ -266,8 +226,6 @@ export class PaymentService {
     }
   }
 
-
-
   async handleBroadcastPaid(payload: any) {
     this.logger.info(`[Broadcast] Raw Payload: ${JSON.stringify(payload)}`);
 
@@ -349,7 +307,7 @@ export class PaymentService {
       const expiryDate = "Selamanya"; // Or calculate based on product metadata if available
 
       this.logger.info(
-        `[Broadcast] Sending email via MessagingService: to=${user.email}, template=OrderSuccess, appId=${appId ?? "(none)"
+        `[Broadcast] Sending email via MessagingService: to=${user.email}, template=OrderSuccess, appId=${appName ?? "(none)"
         }, orderId=${order.id}, kind=${order.kind}`
       );
 
@@ -397,114 +355,5 @@ export class PaymentService {
     }
 
     return { success: true };
-  }
-
-  async handleNotification(notification: any) {
-    this.logger.info("Received notification from Midtrans");WSH
-    try {
-      const statusResponse = await this.snap.transaction.notification(notification);
-      this.logger.debug(`Midtrans Status Response: ${JSON.stringify(statusResponse)}`);
-
-      const orderId = statusResponse.order_id;
-      const transactionStatus = statusResponse.transaction_status;
-      const fraudStatus = statusResponse.fraud_status;
-
-      let status: "pending" | "paid" | "cancelled" = "pending";
-
-      if (transactionStatus === "capture") {
-        if (fraudStatus === "challenge") {
-          status = "pending";
-        } else if (fraudStatus === "accept") {
-          status = "paid";
-        }
-      } else if (transactionStatus === "settlement") {
-        status = "paid";
-      } else if (transactionStatus === "cancel" || transactionStatus === "deny" || transactionStatus === "expire") {
-        status = "cancelled";
-      } else if (transactionStatus === "pending") {
-        status = "pending";
-      }
-
-      this.logger.info(`Order ${orderId} status determined: ${status}`);
-
-      if (status === "paid") {
-        this.logger.info('Payment success received', {
-          data: { orderId, transactionStatus, fraudStatus },
-        });
-
-        const { data: order, error: updateError } = await this.supabase.db
-          .from("orders")
-          .update({ status: "paid" })
-          .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`)
-          .select("*, order_items(*)")
-          .single();
-
-        if (updateError) {
-          this.logger.fail(`Failed to update order ${orderId} to paid`, {
-            data: { updateError },
-          });
-        }
-
-        if (!updateError && order) {
-          const actualOrderId = order.id;
-          this.logger.info(`Order ${actualOrderId} updated to PAID. Updating bookings...`);
-          await this.supabase.db.from("bookings").update({ status: "confirmed" }).eq("order_id", actualOrderId);
-
-          const customerEmail = order.metadata?.attendeeEmail || order.metadata?.buyerEmail;
-
-          if (customerEmail) {
-            const isBook = order.kind === "book";
-            const templateName = "OrderSuccess";
-
-            const context = {
-              username: order.metadata?.attendeeName || "Customer",
-              planName: order.order_items[0]?.title || (isBook ? "E-Book" : "Course"),
-              price: order.total.toLocaleString(),
-              duration: isBook ? "Lifetime" : "Course Access",
-              expiryDate: "N/A",
-              appName: "Bagdja Course"
-            };
-
-            this.logger.info(`[PaymentService] Triggering email to ${customerEmail} using template ${templateName}`, {
-              data: { context },
-            });
-            this.messagingService
-              .sendEmail(customerEmail, templateName, context, "books-and-course-store")
-              .then(() => this.logger.info(`[PaymentService] Platform Email sent successfully to ${customerEmail}`))
-              .catch((mailErr) => this.logger.fail("[PaymentService] Failed to send platform email:", {
-                data: { mailErr },
-              }));
-          } else {
-            this.logger.warn(`No customer email found for order ${actualOrderId}`);
-          }
-        }
-      } else if (status === "cancelled") {
-        this.logger.info(`Order ${orderId} marked as CANCELLED`);
-        // Find the order first to get the correct internal ID if needed, 
-        // but .or should work for update too.
-        await this.supabase.db
-          .from("orders")
-          .update({ status: "cancelled" })
-          .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`);
-
-        // For bookings, we need the internal UUID. Let's fetch the order if it was a refNumber.
-        const { data: order } = await this.supabase.db
-          .from("orders")
-          .select("id")
-          .or(`id.eq.${orderId},platform_ref_number.eq.${orderId}`)
-          .single();
-
-        if (order) {
-          await this.supabase.db.from("bookings").update({ status: "cancelled" }).eq("order_id", order.id);
-        }
-      }
-
-      return { status: "ok" };
-    } catch (error) {
-      this.logger.fail("Error handling Midtrans notification", {
-        data: { error },
-      });
-      throw error;
-    }
   }
 }

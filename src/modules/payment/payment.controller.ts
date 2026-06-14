@@ -24,28 +24,6 @@ export class PaymentController {
     return this.paymentService.createTransaction(orderId, authorization);
   }
 
-  @Post("notification")
-  async notification(@Body() notification: any) {
-    try {
-      console.log("==========================================");
-      console.log("--- MIDTRANS WEBHOOK RECEIVED ---");
-      console.log("Timestamp:", new Date().toISOString());
-      console.log("Payload:", JSON.stringify(notification, null, 2));
-      console.log("==========================================");
-      
-      const result = await this.paymentService.handleNotification(notification);
-      
-      console.log("--- WEBHOOK PROCESSED SUCCESSFULLY ---");
-      return result;
-    } catch (error: any) {
-      console.error("!!! WEBHOOK PROCESSING ERROR !!!");
-      console.error("Error:", error?.message || error);
-      console.error("Stack:", error?.stack);
-      console.log("==========================================");
-      throw error;
-    }
-  }
-
   @Post("broadcast/paid")
   async handleBroadcastPaid(@Body() payload: any) {
     console.log("--- BROADCAST PAID RECEIVED ---");
